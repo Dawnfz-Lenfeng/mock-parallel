@@ -12,7 +12,7 @@ class Config:
 
     # Training settings
     LEARNING_RATE: float = 1e-3
-    NUM_EPOCHS: int = 10
+    NUM_EPOCHS: int = 1
     DEVICE: str = "cuda"
 
     # Model settings

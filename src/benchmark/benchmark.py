@@ -1,5 +1,4 @@
 import time
-from typing import Dict, List, Union
 
 import torch
 from torch.utils.data import DataLoader
@@ -11,11 +10,11 @@ from ..parallel import DataParallel, PipelineParallel, TensorParallel
 class Benchmark:
     @staticmethod
     def run_benchmark(
-        model: Union[myYOLO, DataParallel, TensorParallel, PipelineParallel],
+        model: myYOLO | DataParallel | TensorParallel | PipelineParallel,
         dataloader: DataLoader,
         device: torch.device,
         num_iterations: int = 100,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         运行基准测试
         Args:
@@ -26,7 +25,7 @@ class Benchmark:
         Returns:
             包含测试结果的字典
         """
-        times: List[float] = []
+        times: list[float] = []
         model.eval()
 
         with torch.no_grad():
@@ -49,11 +48,11 @@ class Benchmark:
 
     @staticmethod
     def compare_parallel_methods(
-        models: List[Union[myYOLO, DataParallel, TensorParallel, PipelineParallel]],
+        models: list[myYOLO | DataParallel | TensorParallel | PipelineParallel],
         dataloader: DataLoader,
         device: torch.device,
-        method_names: List[str],
-    ) -> Dict[str, Dict[str, float]]:
+        method_names: list[str],
+    ) -> dict[str, dict[str, float]]:
         """
         比较不同并行方法的性能
         Args:
