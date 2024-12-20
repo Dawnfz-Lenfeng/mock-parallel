@@ -113,7 +113,7 @@ def compute_loss(
     pred_cls: torch.Tensor,
     pred_txtytwth: torch.Tensor,
     targets: torch.Tensor,
-):
+) -> torch.Tensor:
     batch_size = pred_conf.size(0)
     # 损失函数
     conf_loss_function = MSEWithLogitsLoss()

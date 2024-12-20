@@ -15,7 +15,13 @@ from src.parallel.tensor_parallel import TensorParallel
 from src.utils import compute_loss, detection_collate, gt_creator
 
 
-def train(model, dataloader, optimizer, device, num_epochs):
+def train(
+    model: torch.nn.Module,
+    dataloader: DataLoader,
+    optimizer: optim.Optimizer,
+    device: torch.device,
+    num_epochs: int,
+):
     """训练函数"""
     model.train()
     for epoch in range(num_epochs):
