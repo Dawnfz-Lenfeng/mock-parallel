@@ -8,10 +8,8 @@ from torchvision import transforms
 
 from src.benchmark.benchmark import Benchmark
 from src.config import Config
-from src.models.yolo import YOLODataset, myYOLO
-from src.parallel.data_parallel import DataParallel
-from src.parallel.pipeline_parallel import PipelineParallel
-from src.parallel.tensor_parallel import TensorParallel
+from src.models import YOLODataset, myYOLO
+from src.parallel import DataParallel, PipelineParallel, TensorParallel
 from src.utils import compute_loss, detection_collate, gt_creator
 
 
@@ -21,12 +19,25 @@ def train(
     optimizer: optim.Optimizer,
     device: torch.device,
     num_epochs: int,
-):
-    """训练函数"""
+) -> list[float]:
+    """
+    训练函数
+    Args:
+        model: 要训练的模型
+        dataloader: 数据加载器
+        optimizer: 优化器
+        device: 计算设备
+        num_epochs: 训练轮数
+    Returns:
+        训练损失列表
+    """
     model.train()
+    losses: list[float] = []
+
     for epoch in range(num_epochs):
         start = time.time()
-        train_loss = 0
+        train_loss = 0.0
+
         for batch_idx, (images, targets) in enumerate(dataloader):
             # 制作训练标签
             targets = [label.tolist() for label in targets]
@@ -34,7 +45,7 @@ def train(
                 input_size=Config.IMAGE_SIZE, stride=model.stride, label_lists=targets
             )
 
-            # to device
+            # 转移到设备
             images = images.to(device)
             targets = targets.to(device)
 
@@ -45,24 +56,45 @@ def train(
             total_loss = compute_loss(conf_pred, cls_pred, txtytwth_pred, targets)
             train_loss += total_loss.item()
 
-            # 反向传播, 更新梯度
+            # 反向传播
             optimizer.zero_grad()
             total_loss.backward()
-
-            # 更新模型参数
             optimizer.step()
 
+            if batch_idx % 10 == 0:  # 每10个batch打印一次
+                print(
+                    f"Batch [{batch_idx}/{len(dataloader)}], Loss: {total_loss.item():.4f}"
+                )
+
+        # 计算epoch平均损失
         train_loss /= len(dataloader)
+        losses.append(train_loss)
+
+        # 打印训练信息
         end = time.time()
         train_time = end - start
         print(
-            f"Epoch [{epoch+1}/{num_epochs}], time: {train_time:.4f}s, train_loss: {train_loss:.4f}"
+            f"Epoch [{epoch+1}/{num_epochs}], "
+            f"Time: {train_time:.2f}s, "
+            f"Loss: {train_loss:.4f}"
         )
+
+        # 打印GPU内存使用情况
+        if torch.cuda.is_available():
+            memory_allocated = torch.cuda.max_memory_allocated() / 1024**2
+            memory_reserved = torch.cuda.max_memory_reserved() / 1024**2
+            print(
+                f"GPU Memory: Allocated: {memory_allocated:.1f}MB, "
+                f"Reserved: {memory_reserved:.1f}MB"
+            )
+
+    return losses
 
 
 def main():
     # 设置设备
-    device = torch.device(Config.DEVICE)
+    device = torch.device(Config.DEVICE if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
 
     # 数据预处理
     transform = transforms.Compose(
@@ -93,30 +125,38 @@ def main():
     )
 
     # 初始化模型
-    model = myYOLO().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=Config.LEARNING_RATE)
+    base_model = myYOLO().to(device)
+
+    # 获取可用的GPU数量
+    num_gpus = torch.cuda.device_count()
+    device_ids = list(range(num_gpus))
+    print(f"Available GPUs: {num_gpus}")
 
     # 创建不同的并行版本
-    """
-    device_ids = [0, 1, 2, 3]  # 假设有4个GPU
-    data_parallel_model = DataParallel(model, device_ids)
-    tensor_parallel_model = TensorParallel(model, device_ids)
-    pipeline_parallel_model = PipelineParallel(model, device_ids, chunks=4)
-    """
-    # 训练基础版本
-    print("Training base model...")
-    train(model, train_dataloader, optimizer, device, Config.NUM_EPOCHS)
+    data_parallel_model = DataParallel(base_model, device_ids).parallelize()
+    tensor_parallel_model = TensorParallel(base_model, device_ids).parallelize()
+    pipeline_parallel_model = PipelineParallel(
+        base_model, device_ids, chunks=4
+    ).parallelize()
 
-    """
-    # Benchmark比较
+    # 优化器
+    optimizer = optim.Adam(base_model.parameters(), lr=Config.LEARNING_RATE)
+
+    # 训练和比较不同的并行版本
     models = [
-        model,
+        base_model,
         data_parallel_model,
         tensor_parallel_model,
         pipeline_parallel_model,
     ]
     method_names = ["Base", "DataParallel", "TensorParallel", "PipelineParallel"]
 
+    # 训练每个模型
+    for model, name in zip(models, method_names):
+        print(f"\nTraining {name} model...")
+        train(model, train_dataloader, optimizer, device, Config.NUM_EPOCHS)
+
+    # 运行benchmark测试
     print("\nRunning benchmarks...")
     results = Benchmark.compare_parallel_methods(
         models, train_dataloader, device, method_names
@@ -128,8 +168,10 @@ def main():
         print(f"Average time: {metrics['avg_time']:.4f}s")
         print(f"Min time: {metrics['min_time']:.4f}s")
         print(f"Max time: {metrics['max_time']:.4f}s")
-
-    """
+        print(f"Throughput: {metrics['throughput']:.2f} samples/s")
+        if "memory_allocated" in metrics:
+            print(f"GPU Memory Allocated: {metrics['memory_allocated']:.1f}MB")
+            print(f"GPU Memory Reserved: {metrics['memory_reserved']:.1f}MB")
 
 
 if __name__ == "__main__":
