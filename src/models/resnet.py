@@ -1,5 +1,6 @@
 import torch.nn as nn
-from blocks import BasicBlock
+
+from .blocks import BasicBlock
 
 
 class ResNet(nn.Module):

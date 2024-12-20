@@ -6,14 +6,13 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
-from benchmark.benchmark import Benchmark
-from config import Config
-from models.yolo import myYOLO
-from parallel.data_parallel import DataParallel
-from parallel.pipeline_parallel import PipelineParallel
-from parallel.tensor_parallel import TensorParallel
-from utils.dataset import YOLODataset
-from utils.utils import detection_collate, gt_creator, compute_loss
+from src.benchmark.benchmark import Benchmark
+from src.config import Config
+from src.models.yolo import YOLODataset, myYOLO
+from src.parallel.data_parallel import DataParallel
+from src.parallel.pipeline_parallel import PipelineParallel
+from src.parallel.tensor_parallel import TensorParallel
+from src.utils import compute_loss, detection_collate, gt_creator
 
 
 def train(model, dataloader, optimizer, device, num_epochs):
@@ -37,7 +36,7 @@ def train(model, dataloader, optimizer, device, num_epochs):
             conf_pred, cls_pred, txtytwth_pred = model(images)
 
             # 计算损失
-            _, _, _, total_loss = compute_loss(conf_pred, cls_pred, txtytwth_pred, targets)
+            total_loss = compute_loss(conf_pred, cls_pred, txtytwth_pred, targets)
             train_loss += total_loss.item()
 
             # 反向传播, 更新梯度
@@ -92,17 +91,17 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=Config.LEARNING_RATE)
 
     # 创建不同的并行版本
-    '''
+    """
     device_ids = [0, 1, 2, 3]  # 假设有4个GPU
     data_parallel_model = DataParallel(model, device_ids)
     tensor_parallel_model = TensorParallel(model, device_ids)
     pipeline_parallel_model = PipelineParallel(model, device_ids, chunks=4)
-    '''
+    """
     # 训练基础版本
     print("Training base model...")
     train(model, train_dataloader, optimizer, device, Config.NUM_EPOCHS)
-    
-    '''
+
+    """
     # Benchmark比较
     models = [
         model,
@@ -124,6 +123,8 @@ def main():
         print(f"Min time: {metrics['min_time']:.4f}s")
         print(f"Max time: {metrics['max_time']:.4f}s")
 
-    '''
+    """
+
+
 if __name__ == "__main__":
     main()

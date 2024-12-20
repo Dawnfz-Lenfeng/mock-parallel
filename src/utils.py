@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.nn as nn
 
 
 def detection_collate(
@@ -87,3 +88,76 @@ def generate_dxdywh(gt_label, w, h, s):
     weight = 2.0 - (box_w / w) * (box_h / h)
 
     return grid_x, grid_y, tx, ty, tw, th, weight
+
+
+class MSEWithLogitsLoss(nn.Module):
+    def __init__(
+        self,
+    ):
+        super(MSEWithLogitsLoss, self).__init__()
+
+    def forward(self, logits, target):
+        inputs = torch.clamp(torch.sigmoid(logits), min=1e-4, max=1.0 - 1e-4)
+
+        pos_id = (target == 1.0).float()
+        neg_id = (target == 0.0).float()
+        pos_loss = pos_id * (inputs - target) ** 2
+        neg_loss = neg_id * (inputs) ** 2
+        loss = 5.0 * pos_loss + 1.0 * neg_loss
+
+        return loss
+
+
+def compute_loss(
+    pred_conf: torch.Tensor,
+    pred_cls: torch.Tensor,
+    pred_txtytwth: torch.Tensor,
+    targets: torch.Tensor,
+):
+    batch_size = pred_conf.size(0)
+    # 损失函数
+    conf_loss_function = MSEWithLogitsLoss()
+    cls_loss_function = nn.CrossEntropyLoss(reduction="none")
+    txty_loss_function = nn.BCEWithLogitsLoss(reduction="none")
+    twth_loss_function = nn.MSELoss(reduction="none")
+
+    # 预测
+    pred_conf = pred_conf[:, :, 0]  # [B, (H/32)*(W/32),]
+    pred_cls = pred_cls.permute(0, 2, 1)  # [B, C, (H/32)*(W/32)]
+    pred_txty = pred_txtytwth[:, :, :2]  # [B, (H/32)*(W/32), 2]
+    pred_twth = pred_txtytwth[:, :, 2:]  # [B, (H/32)*(W/32), 2]
+
+    # 标签
+    gt_obj = targets[:, :, 0]  # [B, (H/32)*(W/32),]
+    gt_cls = targets[:, :, 1].long()  # [B, (H/32)*(W/32),]
+    gt_txty = targets[:, :, 2:4]  # [B, (H/32)*(W/32), 2]
+    gt_twth = targets[:, :, 4:6]  # [B, (H/32)*(W/32), 2]
+    gt_box_scale_weight = targets[:, :, 6]  # [B, (H/32)*(W/32),]
+
+    batch_size = pred_conf.size(0)
+
+    # 置信度损失
+    conf_loss = conf_loss_function(pred_conf, gt_obj)
+    conf_loss = conf_loss.sum() / batch_size
+
+    # 类别损失
+    cls_loss = cls_loss_function(pred_cls, gt_cls) * gt_obj
+    cls_loss = cls_loss.sum() / batch_size
+
+    # 边界框txty的损失
+    txty_loss = (
+        txty_loss_function(pred_txty, gt_txty).sum(-1) * gt_obj * gt_box_scale_weight
+    )
+    txty_loss = txty_loss.sum() / batch_size
+
+    # 边界框twth的损失
+    twth_loss = (
+        twth_loss_function(pred_twth, gt_twth).sum(-1) * gt_obj * gt_box_scale_weight
+    )
+    twth_loss = twth_loss.sum() / batch_size
+    bbox_loss = txty_loss + twth_loss
+
+    # 总的损失
+    total_loss = conf_loss + cls_loss + bbox_loss
+
+    return total_loss

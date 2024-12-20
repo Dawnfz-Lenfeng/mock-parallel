@@ -16,5 +16,7 @@ class Config:
     DEVICE: str = "cuda"
 
     # Model settings
-    NUM_CLASSES: int = 20
+    NUM_CLASSES: int = 5
     STRIDE: int = 32
+    CONF_THRESH: float = 0.01
+    TRAINABLE: bool = True
