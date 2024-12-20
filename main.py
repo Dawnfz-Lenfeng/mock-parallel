@@ -91,6 +91,21 @@ def train(
     return losses
 
 
+def create_model_copy(model: myYOLO, device: str) -> myYOLO:
+    """创建模型的深度复制"""
+    new_model = myYOLO(
+        device=device,
+        input_size=Config.IMAGE_SIZE,
+        num_classes=Config.NUM_CLASSES,
+        stride=Config.STRIDE,
+        trainable=True
+    ).to(device)
+    
+    # 复制模型参数
+    new_model.load_state_dict(model.state_dict())
+    return new_model
+
+
 def main():
     # 设置设备
     device = torch.device(Config.DEVICE if torch.cuda.is_available() else "cpu")
@@ -124,42 +139,74 @@ def main():
         pin_memory=True,
     )
 
-    # 初始化模型
-    base_model = myYOLO().to(device)
-
     # 获取可用的GPU数量
     num_gpus = torch.cuda.device_count()
     device_ids = list(range(num_gpus))
     print(f"Available GPUs: {num_gpus}")
 
-    # 创建不同的并行版本
-    data_parallel_model = DataParallel(base_model, device_ids).parallelize()
-    tensor_parallel_model = TensorParallel(base_model, device_ids).parallelize()
-    pipeline_parallel_model = PipelineParallel(
-        base_model, device_ids, chunks=4
+    # 初始化基础模型
+    base_device = f'cuda:{device_ids[0]}'
+    base_model = myYOLO(
+        device=base_device,
+        input_size=Config.IMAGE_SIZE,
+        num_classes=Config.NUM_CLASSES,
+        stride=Config.STRIDE,
+        trainable=True
+    ).to(base_device)
+
+    # 创建不同的并行版本（每个都是独立的模型副本）
+    data_parallel_model = DataParallel(
+        create_model_copy(base_model, base_device),
+        device_ids
     ).parallelize()
 
-    # 优化器
-    optimizer = optim.Adam(base_model.parameters(), lr=Config.LEARNING_RATE)
+    tensor_parallel_model = TensorParallel(
+        create_model_copy(base_model, base_device),
+        device_ids
+    ).parallelize()
+
+    pipeline_parallel_model = PipelineParallel(
+        create_model_copy(base_model, base_device),
+        device_ids,
+        chunks=4
+    ).parallelize()
+
+    # 为每个模型创建独立的优化器
+    optimizers = {
+        "Base": optim.Adam(base_model.parameters(), lr=Config.LEARNING_RATE),
+        "DataParallel": optim.Adam(data_parallel_model.parameters(), lr=Config.LEARNING_RATE),
+        "TensorParallel": optim.Adam(tensor_parallel_model.parameters(), lr=Config.LEARNING_RATE),
+        "PipelineParallel": optim.Adam(pipeline_parallel_model.parameters(), lr=Config.LEARNING_RATE)
+    }
 
     # 训练和比较不同的并行版本
-    models = [
-        base_model,
-        data_parallel_model,
-        tensor_parallel_model,
-        pipeline_parallel_model,
-    ]
-    method_names = ["Base", "DataParallel", "TensorParallel", "PipelineParallel"]
+    models = {
+        "Base": base_model,
+        "DataParallel": data_parallel_model,
+        "TensorParallel": tensor_parallel_model,
+        "PipelineParallel": pipeline_parallel_model
+    }
 
     # 训练每个模型
-    for model, name in zip(models, method_names):
+    for name, model in models.items():
         print(f"\nTraining {name} model...")
-        train(model, train_dataloader, optimizer, device, Config.NUM_EPOCHS)
+        # 确保模型在训练模式
+        model.train()
+        model.trainable = True
+        train(model, train_dataloader, optimizers[name], device, Config.NUM_EPOCHS)
 
     # 运行benchmark测试
     print("\nRunning benchmarks...")
+    # 确保所有模型都在评估模式
+    for model in models.values():
+        model.eval()
+        model.trainable = False
+    
     results = Benchmark.compare_parallel_methods(
-        models, train_dataloader, device, method_names
+        list(models.values()),
+        train_dataloader,
+        device,
+        list(models.keys())
     )
 
     # 打印benchmark结果
