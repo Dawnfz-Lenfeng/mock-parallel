@@ -1,1 +1,1 @@
-from yolo import YOLODataset, myYOLO
+from .yolo import YOLODataset, myYOLO
