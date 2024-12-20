@@ -47,31 +47,41 @@ class PipelineParallel(myYOLO):
         if not self.trainable:
             return self.inference(x)
 
-        # 将输入分成chunks
+        batch_size = x.size(0)
+        # 确保micro-batch大小能整除batch_size
+        self.chunks = min(self.chunks, batch_size)
+        while batch_size % self.chunks != 0:
+            self.chunks -= 1
+
+        # 将输入数据分割成多个micro-batch
         micro_batches = x.chunk(self.chunks)
         outputs = []
 
-        for mb in micro_batches:
-            # backbone (GPU 0)
-            mb = mb.to(f"cuda:{self.device_ids[0]}")
-            feat = self.backbone(mb)
+        # 使用流水线方式进行前向传播
+        for i in range(self.chunks):
+            # 在第一个GPU上处理新的micro-batch（backbone阶段）
+            curr_mb = micro_batches[i].to(f"cuda:{self.device_ids[0]}")
+            feat = self.backbone(curr_mb)
 
-            # neck (GPU 1)
+            # 在第二个GPU上处理neck阶段
             feat = feat.to(f"cuda:{self.device_ids[1 % self.num_gpus]}")
             feat = self.neck(feat)
 
-            # convs (GPU 2)
+            # 在第三个GPU上处理convs阶段
             feat = feat.to(f"cuda:{self.device_ids[2 % self.num_gpus]}")
             feat = self.convs(feat)
 
-            # pred (GPU 3)
+            # 在第四个GPU上处理pred阶段
             feat = feat.to(f"cuda:{self.device_ids[3 % self.num_gpus]}")
             pred = self.pred(feat)
-
             outputs.append(pred)
 
         # 合并所有micro-batch的输出
         output = torch.cat(outputs, dim=0)
+
+        # 确保输出大小与输入batch_size一致
+        if output.size(0) != batch_size:
+            output = output[:batch_size]
 
         # 处理输出
         pred = output.permute(0, 2, 3, 1).contiguous().flatten(1, 2)
