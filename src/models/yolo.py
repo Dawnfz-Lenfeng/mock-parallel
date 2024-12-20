@@ -54,16 +54,23 @@ class YOLODataset(Dataset):
 class myYOLO(nn.Module):
     def __init__(
         self,
+        device=Config.DEVICE,
+        input_size=224,
         num_classes=Config.NUM_CLASSES,
         stride=Config.STRIDE,
         conf_thresh=Config.CONF_THRESH,
+        nms_thresh=Config.NMS_THRESH,
         trainable=Config.TRAINABLE,
     ):
         super(myYOLO, self).__init__()
-        self.num_classes = num_classes  # 类别数
-        self.stride = stride  # 网格最大步长
-        self.conf_thresh = conf_thresh  # 得分阈值
-        self.trainable = trainable  # 训练标识
+        self.num_classes = num_classes
+        self.stride = stride
+        self.conf_thresh = conf_thresh
+        self.nms_thresh = nms_thresh
+        self.trainable = trainable
+
+        self.device = device
+        self.set_grid(input_size)
 
         # backbone:ResNet34
         """
@@ -195,7 +202,7 @@ class myYOLO(nn.Module):
         labels = labels[keep]
 
         # NMS
-        keep = np.zeros(len(bboxes), dtype=np.int)
+        keep = np.zeros(len(bboxes), dtype=np.int32)
         for i in range(self.num_classes):
             inds = np.where(labels == i)[0]
             if len(inds) == 0:
