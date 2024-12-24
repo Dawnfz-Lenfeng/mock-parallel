@@ -1,7 +1,7 @@
 import os
 
 import torch
-from src.benchmark import compare_parallel_methods
+from src.benchmark import compare_parallel_methods, format_benchmark_results
 from src.config import Config
 from src.models import YOLODataset, myYOLO
 from src.parallel import DataParallel, PipelineParallel, TensorParallel
@@ -88,21 +88,16 @@ def main():
 
     # 运行benchmark测试
     print("\nRunning benchmarks...")
-
     results = compare_parallel_methods(
         list(models.values()), train_dataloader, device, list(models.keys())
     )
 
-    # 打印benchmark结果
-    for name, metrics in results.items():
-        print(f"\n{name} Results:")
-        print(f"Average time: {metrics['avg_time']:.4f}s")
-        print(f"Min time: {metrics['min_time']:.4f}s")
-        print(f"Max time: {metrics['max_time']:.4f}s")
-        print(f"Throughput: {metrics['throughput']:.2f} samples/s")
-        if "memory_allocated" in metrics:
-            print(f"GPU Memory Allocated: {metrics['memory_allocated']:.1f}MB")
-            print(f"GPU Memory Reserved: {metrics['memory_reserved']:.1f}MB")
+    # 打印格式化的benchmark结果
+    print(format_benchmark_results(results))
+
+    # 可选：保存结果到文件
+    with open("benchmark_results.txt", "w") as f:
+        f.write(format_benchmark_results(results))
 
 
 if __name__ == "__main__":

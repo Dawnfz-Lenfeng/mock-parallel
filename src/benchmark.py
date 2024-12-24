@@ -1,4 +1,5 @@
 import time
+from dataclasses import dataclass
 
 import torch
 from torch.utils.data import DataLoader
@@ -8,11 +9,51 @@ from .models import myYOLO
 from .utils import compute_loss, gt_creator
 
 
+@dataclass
+class BenchmarkResult:
+    """Benchmark结果的数据类"""
+
+    avg_epoch_time: float  # 平均每个epoch的时间
+    min_epoch_time: float  # 最小epoch时间
+    max_epoch_time: float  # 最大epoch时间
+    avg_batch_time: float  # 平均batch时间
+    samples_per_second: float  # 每秒处理的样本数
+    avg_loss: float  # 平均损失
+    memory_allocated: float  # 分配的GPU内存(MB)
+    memory_reserved: float  # 预留的GPU内存(MB)
+
+
+def format_benchmark_results(results: dict[str, dict[str, float]]) -> str:
+    """格式化benchmark结果为易读的字符串"""
+    output = []
+    output.append("\n" + "=" * 50)
+    output.append("Benchmark Results")
+    output.append("=" * 50)
+
+    for method_name, metrics in results.items():
+        result = BenchmarkResult(**metrics)
+        output.append(f"\n{method_name}:")
+        output.append("-" * 30)
+        output.append(f"Performance Metrics:")
+        output.append(f"  • Average Epoch Time: {result.avg_epoch_time:.4f}s")
+        output.append(f"  • Min Epoch Time: {result.min_epoch_time:.4f}s")
+        output.append(f"  • Max Epoch Time: {result.max_epoch_time:.4f}s")
+        output.append(f"  • Average Batch Time: {result.avg_batch_time:.4f}s")
+        output.append(f"  • Throughput: {result.samples_per_second:.2f} samples/s")
+        output.append(f"\nTraining Metrics:")
+        output.append(f"  • Average Loss: {result.avg_loss:.4f}")
+        output.append(f"\nMemory Usage:")
+        output.append(f"  • Allocated: {result.memory_allocated:.1f}MB")
+        output.append(f"  • Reserved: {result.memory_reserved:.1f}MB")
+
+    return "\n".join(output)
+
+
 def run_benchmark(
     model: myYOLO,
     dataloader: DataLoader,
     device: torch.device,
-    num_iterations: int = 1,
+    num_iterations: int = Config.NUM_EPOCHS,
 ) -> dict[str, float]:
     """
     运行训练性能基准测试
