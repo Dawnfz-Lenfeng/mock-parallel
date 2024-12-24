@@ -46,19 +46,24 @@ class CustomDataParallel(myYOLO):
 
         self.device_ids = device_ids
         self.num_gpus = len(device_ids)
-        self.load_state_dict(model.state_dict())
 
         # 在每个GPU上创建模型副本
-        self.models = nn.ModuleList(
-            [self._create_model_copy(f"cuda:{gpu_id}") for gpu_id in device_ids]
-        )
-
-    def _create_model_copy(self, device: str) -> nn.Module:
-        """在指定设备上创建模型副本"""
-        model = nn.Sequential(self.backbone, self.neck, self.convs, self.pred).to(
-            device
-        )
-        return model
+        self.models = nn.ModuleList()
+        for gpu_id in device_ids:
+            # 为每个GPU创建完整的模型副本
+            device = f"cuda:{gpu_id}"
+            model_copy = myYOLO(
+                device=device,
+                input_size=model.input_size,
+                num_classes=model.num_classes,
+                stride=model.stride,
+                conf_thresh=model.conf_thresh,
+                nms_thresh=model.nms_thresh,
+                trainable=model.trainable,
+            ).to(device)
+            # 复制模型参数
+            model_copy.load_state_dict(model.state_dict())
+            self.models.append(model_copy)
 
     def scatter_inputs(self, x: torch.Tensor) -> list[torch.Tensor]:
         """将输入数据分散到不同GPU"""
@@ -107,8 +112,14 @@ class CustomDataParallel(myYOLO):
         # 在每个GPU上并行处理
         outputs = []
         for i, chunk in enumerate(scattered_inputs):
-            out = self.models[i](chunk)
-            outputs.append(out)
+            # 使用对应GPU上的模型进行前向传播
+            conf_pred, cls_pred, txtytwth_pred = self.models[i](chunk)
+            # 将三个输出拼接回原始形式
+            B = chunk.size(0)
+            H = W = chunk.size(2) // self.stride
+            pred = torch.cat([conf_pred, cls_pred, txtytwth_pred], dim=-1)
+            pred = pred.view(B, H, W, -1).permute(0, 3, 1, 2)
+            outputs.append(pred)
 
         # 收集并合并输出
         return self.gather_outputs(outputs)
