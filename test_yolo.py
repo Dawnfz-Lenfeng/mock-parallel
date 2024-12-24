@@ -1,6 +1,7 @@
 import torch
-from src.models.yolo import myYOLO
 from torchsummary import summary
+
+from src.models.yolo import myYOLO
 
 if __name__ == "__main__":
     IMSIZE = 224

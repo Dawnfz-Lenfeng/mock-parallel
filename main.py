@@ -1,13 +1,19 @@
 import os
 
 import torch
+from torch.utils.data import DataLoader
+from torchvision import transforms
+
 from src.benchmark import compare_parallel_methods, format_benchmark_results
 from src.config import Config
 from src.models import YOLODataset, myYOLO
-from src.parallel import DataParallel, PipelineParallel, TensorParallel
+from src.parallel import (
+    CustomDataParallel,
+    DataParallel,
+    PipelineParallel,
+    TensorParallel,
+)
 from src.utils import detection_collate
-from torch.utils.data import DataLoader
-from torchvision import transforms
 
 
 def create_model_copy(model: myYOLO, device: str) -> myYOLO:
@@ -75,13 +81,15 @@ def main():
 
     # 创建不同的并行版本
     data_parallel_model = DataParallel(base_model, device_ids)
+    custom_data_parallel_model = CustomDataParallel(base_model, device_ids)
     tensor_parallel_model = TensorParallel(base_model, device_ids)
     pipeline_parallel_model = PipelineParallel(base_model, device_ids, chunks=4)
 
     # 训练和比较不同的并行版本
     models = {
         "Base": base_model,
-        "DataParallel": data_parallel_model,
+        "PyTorch DataParallel": data_parallel_model,
+        "Custom DataParallel": custom_data_parallel_model,
         "TensorParallel": tensor_parallel_model,
         "PipelineParallel": pipeline_parallel_model,
     }
