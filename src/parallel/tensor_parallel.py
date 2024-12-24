@@ -1,5 +1,4 @@
 import copy
-from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -77,7 +76,7 @@ class TensorParallel(myYOLO):
 
     def forward(
         self, x: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """前向传播"""
         if not self.trainable:
             return self.inference(x)

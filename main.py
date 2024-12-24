@@ -3,14 +3,13 @@ import time
 
 import torch
 import torch.optim as optim
-from torch.utils.data import DataLoader
-from torchvision import transforms
-
-from src.benchmark.benchmark import Benchmark
+from src.benchmark import compare_parallel_methods
 from src.config import Config
 from src.models import YOLODataset, myYOLO
 from src.parallel import DataParallel, PipelineParallel, TensorParallel
 from src.utils import compute_loss, detection_collate, gt_creator
+from torch.utils.data import DataLoader
+from torchvision import transforms
 
 
 def train(
@@ -182,12 +181,12 @@ def main():
     }
 
     # 训练每个模型
-    for name, model in models.items():
-        print(f"\nTraining {name} model...")
-        # 确保模型在训练模式
-        model.train()
-        model.trainable = True
-        train(model, train_dataloader, optimizers[name], device, Config.NUM_EPOCHS)
+    # for name, model in models.items():
+    #     print(f"\nTraining {name} model...")
+    #     # 确保模型在训练模式
+    #     model.train()
+    #     model.trainable = True
+    #     train(model, train_dataloader, optimizers[name], device, Config.NUM_EPOCHS)
 
     # 运行benchmark测试
     print("\nRunning benchmarks...")
@@ -196,7 +195,7 @@ def main():
         model.eval()
         model.trainable = False
 
-    results = Benchmark.compare_parallel_methods(
+    results = compare_parallel_methods(
         list(models.values()), train_dataloader, device, list(models.keys())
     )
 
