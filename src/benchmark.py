@@ -54,7 +54,7 @@ def run_benchmark(
     model: myYOLO,
     dataloader: DataLoader,
     device: torch.device,
-    num_iterations: int = Config.NUM_EPOCHS,
+    num_epochs: int = Config.NUM_EPOCHS,
 ) -> dict[str, float]:
     """运行训练性能基准测试"""
     times: list[float] = []
@@ -66,7 +66,7 @@ def run_benchmark(
     model.trainable = True
     optimizer = torch.optim.Adam(model.parameters(), lr=Config.LEARNING_RATE)
 
-    for i in range(num_iterations):
+    for i in range(num_epochs):
         batch_times: list[float] = []
         epoch_loss = 0.0
 
@@ -108,7 +108,7 @@ def run_benchmark(
         times.append(sum(batch_times))
         training_losses.append(epoch_loss / len(dataloader))
 
-        print(f"\rIteration {i+1}/{num_iterations}", end="")
+        print(f"\rEpoch {i+1}/{num_epochs}", end="")
 
     # 收集GPU内存统计
     memory_stats = {
