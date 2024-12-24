@@ -47,12 +47,14 @@ class CustomDataParallel(myYOLO):
         self.device_ids = device_ids
         self.num_gpus = len(device_ids)
 
-        # 在每个GPU上创建模型副本
-        self.models = nn.ModuleList()
-        for gpu_id in device_ids:
-            # 为每个GPU创建完整的模型副本
-            device = f"cuda:{gpu_id}"
-            model_copy = myYOLO(
+        # 主模型在第一个GPU上
+        self.main_model = self.to(f"cuda:{device_ids[0]}")
+
+        # 在其他GPU上创建参数引用
+        self.replicas = []
+        for i in range(1, self.num_gpus):
+            device = f"cuda:{device_ids[i]}"
+            replica = myYOLO(
                 device=device,
                 input_size=model.input_size,
                 num_classes=model.num_classes,
@@ -61,9 +63,15 @@ class CustomDataParallel(myYOLO):
                 nms_thresh=model.nms_thresh,
                 trainable=model.trainable,
             ).to(device)
-            # 复制模型参数
-            model_copy.load_state_dict(model.state_dict())
-            self.models.append(model_copy)
+
+            # 将副本的参数设置为主模型参数的引用
+            for param_r, param_m in zip(
+                replica.parameters(), self.main_model.parameters()
+            ):
+                param_r.data = param_m.data
+                param_r.requires_grad = True
+
+            self.replicas.append(replica)
 
     def scatter_inputs(self, x: torch.Tensor) -> list[torch.Tensor]:
         """将输入数据分散到不同GPU"""
@@ -78,7 +86,8 @@ class CustomDataParallel(myYOLO):
         start = 0
         for i, size in enumerate(chunk_sizes):
             end = start + size
-            chunk = x[start:end].to(f"cuda:{self.device_ids[i]}")
+            device = f"cuda:{self.device_ids[i]}"
+            chunk = x[start:end].to(device)
             chunks.append(chunk)
             start = end
 
@@ -111,10 +120,18 @@ class CustomDataParallel(myYOLO):
 
         # 在每个GPU上并行处理
         outputs = []
-        for i, chunk in enumerate(scattered_inputs):
-            # 使用对应GPU上的模型进行前向传播
-            conf_pred, cls_pred, txtytwth_pred = self.models[i](chunk)
-            # 将三个输出拼接回原始形式
+
+        # 主模型处理第一个chunk
+        conf_pred, cls_pred, txtytwth_pred = self.main_model(scattered_inputs[0])
+        B = scattered_inputs[0].size(0)
+        H = W = scattered_inputs[0].size(2) // self.stride
+        pred = torch.cat([conf_pred, cls_pred, txtytwth_pred], dim=-1)
+        pred = pred.view(B, H, W, -1).permute(0, 3, 1, 2)
+        outputs.append(pred)
+
+        # 副本处理剩余chunks
+        for i, (chunk, replica) in enumerate(zip(scattered_inputs[1:], self.replicas)):
+            conf_pred, cls_pred, txtytwth_pred = replica(chunk)
             B = chunk.size(0)
             H = W = chunk.size(2) // self.stride
             pred = torch.cat([conf_pred, cls_pred, txtytwth_pred], dim=-1)
@@ -123,3 +140,29 @@ class CustomDataParallel(myYOLO):
 
         # 收集并合并输出
         return self.gather_outputs(outputs)
+
+    def reduce_gradients(self):
+        """同步所有GPU上的梯度"""
+        # 对于每个参数
+        for param_idx, param in enumerate(self.main_model.parameters()):
+            if param.grad is None:
+                continue
+
+            # 收集所有副本的梯度
+            grads = [param.grad.data]
+            for replica in self.replicas:
+                replica_param = list(replica.parameters())[param_idx]
+                if replica_param.grad is not None:
+                    grads.append(replica_param.grad.data)
+
+            # 计算平均梯度
+            grad = torch.stack(grads).mean(dim=0)
+
+            # 更新主模型的梯度
+            param.grad.data = grad
+
+            # 更新副本的梯度（虽然不是必需的，但保持一致性）
+            for replica in self.replicas:
+                replica_param = list(replica.parameters())[param_idx]
+                if replica_param.grad is not None:
+                    replica_param.grad.data = grad

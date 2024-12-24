@@ -5,6 +5,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from .config import Config
+from .parallel import CustomDataParallel
 from .utils import compute_loss, gt_creator
 from .yolo import myYOLO
 
@@ -55,16 +56,7 @@ def run_benchmark(
     device: torch.device,
     num_iterations: int = Config.NUM_EPOCHS,
 ) -> dict[str, float]:
-    """
-    运行训练性能基准测试
-    Args:
-        model: 要测试的模型
-        dataloader: 数据加载器
-        device: 计算设备
-        num_iterations: 测试迭代次数
-    Returns:
-        包含测试结果的字典
-    """
+    """运行训练性能基准测试"""
     times: list[float] = []
     training_losses: list[float] = []
     all_batch_times: list[float] = []
@@ -94,6 +86,11 @@ def run_benchmark(
             conf_pred, cls_pred, txtytwth_pred = model(images)
             loss = compute_loss(conf_pred, cls_pred, txtytwth_pred, targets)
             loss.backward()
+
+            # 如果是自定义的DataParallel，需要同步梯度
+            if isinstance(model, CustomDataParallel):
+                model.reduce_gradients()
+
             optimizer.step()
 
             # 确保GPU操作完成
