@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from ..models import myYOLO
+from ..yolo import myYOLO
 
 
 class DataParallel(myYOLO):

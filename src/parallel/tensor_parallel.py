@@ -3,7 +3,7 @@ import copy
 import torch
 import torch.nn as nn
 
-from ..models import myYOLO
+from ..yolo import myYOLO
 
 
 class TensorParallel(myYOLO):

@@ -5,8 +5,8 @@ import torch
 from torch.utils.data import DataLoader
 
 from .config import Config
-from .models import myYOLO
 from .utils import compute_loss, gt_creator
+from .yolo import myYOLO
 
 
 @dataclass
