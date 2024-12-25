@@ -1,9 +1,82 @@
-import copy
-
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from ..yolo import myYOLO
+
+
+class ParallelLinear(nn.Module):
+    """并行线性层实现"""
+
+    def __init__(self, in_features: int, out_features: int, num_gpus: int):
+        super().__init__()
+        self.num_gpus = num_gpus
+        # 将输出特征分割到不同GPU
+        self.out_features_per_gpu = out_features // num_gpus
+        self.weights = nn.ParameterList(
+            [
+                nn.Parameter(torch.randn(self.out_features_per_gpu, in_features))
+                for _ in range(num_gpus)
+            ]
+        )
+        self.biases = nn.ParameterList(
+            [
+                nn.Parameter(torch.zeros(self.out_features_per_gpu))
+                for _ in range(num_gpus)
+            ]
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # 在每个GPU上计算部分输出
+        outputs = []
+        for i in range(self.num_gpus):
+            device = f"cuda:{i}"
+            local_x = x.to(device)
+            local_out = F.linear(local_x, self.weights[i], self.biases[i])
+            outputs.append(local_out)
+        # 合并所有GPU的结果
+        return torch.cat(outputs, dim=1)
+
+
+class ParallelConv2d(nn.Module):
+    """并行卷积层实现"""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int,
+        padding: int,
+        num_gpus: int,
+    ):
+        super().__init__()
+        self.num_gpus = num_gpus
+        # 将输出通道分割到不同GPU
+        self.out_channels_per_gpu = out_channels // num_gpus
+        self.convs = nn.ModuleList(
+            [
+                nn.Conv2d(
+                    in_channels,
+                    self.out_channels_per_gpu,
+                    kernel_size,
+                    stride=stride,
+                    padding=padding,
+                )
+                for _ in range(num_gpus)
+            ]
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # 在每个GPU上计算部分输出
+        outputs = []
+        for i in range(self.num_gpus):
+            device = f"cuda:{i}"
+            local_x = x.to(device)
+            local_out = self.convs[i](local_x)
+            outputs.append(local_out)
+        # 合并所有GPU的结果
+        return torch.cat(outputs, dim=1)
 
 
 class TensorParallel(myYOLO):
@@ -11,7 +84,7 @@ class TensorParallel(myYOLO):
 
     def __init__(self, model: myYOLO, device_ids: list[int]):
         super().__init__(
-            device=f"cuda:{device_ids[0]}",  # 主设备设为第一个GPU
+            device=f"cuda:{device_ids[0]}",
             input_size=model.input_size,
             num_classes=model.num_classes,
             stride=model.stride,
@@ -23,56 +96,50 @@ class TensorParallel(myYOLO):
         self.device_ids = device_ids
         self.num_gpus = len(device_ids)
 
-        # 将每个子模块分配到不同GPU
-        self._distribute_modules()
+        # 替换模型中的大型层为并行版本
+        self._parallelize_layers()
 
-    def _distribute_modules(self):
-        """将模型的不同部分分配到不同GPU"""
-        # 为每个GPU创建一个完整的backbone副本
-        backbones = []
-        for gpu_id in self.device_ids:
-            device = f"cuda:{gpu_id}"
-            backbone_copy = copy.deepcopy(self.backbone)
-            backbone_copy = backbone_copy.to(device)
-            backbones.append(backbone_copy)
-        self.backbone = nn.ModuleList(backbones)
+    def _parallelize_layers(self):
+        """将模型中的大型层替换为并行版本"""
+        # 替换backbone中的大型卷积层
+        for name, module in self.backbone.named_children():
+            if isinstance(module, nn.Conv2d) and module.out_channels >= 256:
+                setattr(
+                    self.backbone,
+                    name,
+                    ParallelConv2d(
+                        module.in_channels,
+                        module.out_channels,
+                        module.kernel_size[0],
+                        module.stride[0],
+                        module.padding[0],
+                        self.num_gpus,
+                    ),
+                )
 
-        # 为每个GPU创建neck的一部分
-        neck_layers = list(self.neck.children())
-        neck_per_gpu = max(len(neck_layers) // self.num_gpus, 1)
-        neck_splits = []
+        # 替换neck中的大型卷积层
+        for i, module in enumerate(self.neck.children()):
+            if isinstance(module, nn.Conv2d) and module.out_channels >= 256:
+                self.neck[i] = ParallelConv2d(
+                    module.in_channels,
+                    module.out_channels,
+                    module.kernel_size[0],
+                    module.stride[0],
+                    module.padding[0],
+                    self.num_gpus,
+                )
 
-        for i, gpu_id in enumerate(self.device_ids):
-            device = f"cuda:{gpu_id}"
-            start_idx = i * neck_per_gpu
-            end_idx = (
-                start_idx + neck_per_gpu if i < self.num_gpus - 1 else len(neck_layers)
-            )
-            if start_idx < len(neck_layers):
-                split = nn.Sequential(*neck_layers[start_idx:end_idx]).to(device)
-                neck_splits.append(split)
-        self.neck = nn.ModuleList(neck_splits)
-
-        # 为每个GPU创建convs的一部分
-        convs_layers = list(self.convs.children())
-        convs_per_gpu = max(len(convs_layers) // self.num_gpus, 1)
-        convs_splits = []
-
-        for i, gpu_id in enumerate(self.device_ids):
-            device = f"cuda:{gpu_id}"
-            start_idx = i * convs_per_gpu
-            end_idx = (
-                start_idx + convs_per_gpu
-                if i < self.num_gpus - 1
-                else len(convs_layers)
-            )
-            if start_idx < len(convs_layers):
-                split = nn.Sequential(*convs_layers[start_idx:end_idx]).to(device)
-                convs_splits.append(split)
-        self.convs = nn.ModuleList(convs_splits)
-
-        # pred层分配到最后一个GPU
-        self.pred = self.pred.to(f"cuda:{self.device_ids[-1]}")
+        # 替换detection head中的大型卷积层
+        for i, module in enumerate(self.convs.children()):
+            if isinstance(module, nn.Conv2d) and module.out_channels >= 256:
+                self.convs[i] = ParallelConv2d(
+                    module.in_channels,
+                    module.out_channels,
+                    module.kernel_size[0],
+                    module.stride[0],
+                    module.padding[0],
+                    self.num_gpus,
+                )
 
     def forward(
         self, x: torch.Tensor
@@ -81,54 +148,16 @@ class TensorParallel(myYOLO):
         if not self.trainable:
             return self.inference(x)
 
-        # 输入数据分割并移到不同GPU
-        batch_size = x.size(0)
-        chunk_size = max(batch_size // self.num_gpus, 1)
-        chunks = []
-        for i, gpu_id in enumerate(self.device_ids):
-            device = f"cuda:{gpu_id}"
-            if i == self.num_gpus - 1:
-                chunk = x[i * chunk_size :].to(device)
-            else:
-                chunk = x[i * chunk_size : (i + 1) * chunk_size].to(device)
-            chunks.append(chunk)
-
-        # 在不同GPU上并行处理
-        outputs = []
-        for i, chunk in enumerate(chunks):
-            # backbone - 每个GPU都有完整的backbone
-            feat = self.backbone[i](chunk)
-
-            # neck - 串行处理每个部分
-            for j in range(len(self.neck)):
-                device = f"cuda:{self.device_ids[j]}"
-                feat = feat.to(device)
-                feat = self.neck[j](feat)
-
-            # convs - 串行处理每个部分
-            for j in range(len(self.convs)):
-                device = f"cuda:{self.device_ids[j]}"
-                feat = feat.to(device)
-                feat = self.convs[j](feat)
-
-            # pred - 在最后一个GPU上处理
-            feat = feat.to(f"cuda:{self.device_ids[-1]}")
-            pred = self.pred(feat)
-            outputs.append(pred)
-
-        # 在最后一个GPU上合并结果
-        output = torch.cat(outputs, dim=0)
+        # 正常前向传播，并行层会自动处理张量分割和合并
+        x = self.backbone(x)
+        x = self.neck(x)
+        x = self.convs(x)
+        x = self.pred(x)
 
         # 处理输出
-        pred = output.permute(0, 2, 3, 1).contiguous().flatten(1, 2)
+        pred = x.permute(0, 2, 3, 1).contiguous().flatten(1, 2)
         conf_pred = pred[..., :1]
         cls_pred = pred[..., 1 : 1 + self.num_classes]
         txtytwth_pred = pred[..., 1 + self.num_classes :]
-
-        # 确保所有输出都在主设备上
-        main_device = f"cuda:{self.device_ids[0]}"
-        conf_pred = conf_pred.to(main_device)
-        cls_pred = cls_pred.to(main_device)
-        txtytwth_pred = txtytwth_pred.to(main_device)
 
         return conf_pred, cls_pred, txtytwth_pred
