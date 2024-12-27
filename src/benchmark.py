@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from .config import Config
-from .parallel import CustomDataParallel
+from .parallel import CustomDataParallel, MPDataParallel
 from .utils import compute_loss, gt_creator
 from .yolo import myYOLO
 
@@ -88,7 +88,7 @@ def run_benchmark(
             loss.backward()
 
             # 如果是自定义的DataParallel，需要同步梯度
-            if isinstance(model, CustomDataParallel):
+            if isinstance(model, (CustomDataParallel, MPDataParallel)):
                 model.reduce_gradients()
 
             optimizer.step()
